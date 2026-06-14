@@ -9,7 +9,7 @@ import threading
 from collections import Counter
 from typing import Any
 
-from netsentry.common.schemas import JSON_FRAME_DELIMITER
+from netsentry.common.schemas import JSON_FRAME_DELIMITER, STREAM_ENCODING
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -17,7 +17,6 @@ DEFAULT_PORT = 9999
 RECV_BUFFER_SIZE = 4096
 SOCKET_TIMEOUT_SECONDS = 1.0
 MAX_PENDING_BUFFER_BYTES = 1_000_000
-STREAM_ENCODING = "utf-8"
 FRAME_DELIMITER_BYTES = JSON_FRAME_DELIMITER.encode(STREAM_ENCODING)
 
 
@@ -60,12 +59,31 @@ def split_stream_buffer(receive_buffer: bytes) -> tuple[list[bytes], bytes]:
     TCP is a stream, so one recv call can contain partial JSON, one JSON
     message, or multiple JSON messages. The trailing newline marks each
     complete telemetry frame.
+
+    Why ``maxsplit=1``:
+        ``bytes.split`` without a limit would consume the *entire* buffer in
+        one call and discard any partial frame at the tail.  ``maxsplit=1``
+        peels off exactly one frame per iteration so the loop can stop as soon
+        as no complete delimiter is found, leaving the incomplete tail intact
+        for the next ``recv`` call.
+
+    Why ``.strip()`` is only a truthiness guard:
+        The unsplit ``frame_bytes`` (not the stripped copy) is appended to
+        ``complete_frames`` so that ``json.loads`` sees exactly the bytes that
+        arrived off the wire.  ``json.loads`` already ignores surrounding ASCII
+        whitespace, so no information is lost.  The truthiness check simply
+        discards frames that are entirely whitespace (e.g. a double-newline
+        sent by a misbehaving client) without logging a spurious JSON error.
     """
     complete_frames: list[bytes] = []
 
     while FRAME_DELIMITER_BYTES in receive_buffer:
+        # maxsplit=1: isolate the first complete frame and keep the rest of
+        # the buffer (which may contain more frames or a partial frame) intact.
         frame_bytes, receive_buffer = receive_buffer.split(FRAME_DELIMITER_BYTES, 1)
 
+        # Skip frames that are blank (e.g. consecutive delimiters); pass the
+        # original unsplit bytes so json.loads receives unmodified wire data.
         if frame_bytes.strip():
             complete_frames.append(frame_bytes)
 
@@ -143,8 +161,12 @@ def handle_client_connection(
                     data_chunk = client_socket.recv(RECV_BUFFER_SIZE)
                 except socket.timeout:
                     continue
-                except ConnectionResetError:
-                    print(f"[server] Connection reset by {client_label}")
+                except (ConnectionResetError, ConnectionAbortedError) as error:
+                    # Covers both POSIX ECONNRESET and Windows WSAECONNABORTED (10053).
+                    print(
+                        f"[server] Connection abruptly closed by {client_label} "
+                        f"({type(error).__name__})"
+                    )
                     break
                 except BrokenPipeError:
                     print(f"[server] Broken pipe while reading from {client_label}")

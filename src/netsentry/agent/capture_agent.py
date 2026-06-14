@@ -10,6 +10,7 @@ from typing import Any
 
 from netsentry.common.privileges import require_admin_privileges
 from netsentry.common.schemas import (
+    STREAM_ENCODING,
     create_packet_metadata_template,
     sanitize_payload_preview,
     serialize_packet,
@@ -26,7 +27,6 @@ DEFAULT_SERVER_PORT = 9999
 CONNECT_RETRY_SECONDS = 2.0
 SOCKET_TIMEOUT_SECONDS = 5.0
 MAX_OUTBOUND_FRAMES = 1000
-STREAM_ENCODING = "utf-8"
 SNIFF_FILTER = "ip"
 
 PLAINTEXT_MARKERS = (
@@ -51,6 +51,17 @@ class TelemetrySocketClient:
         port: int = DEFAULT_SERVER_PORT,
         retry_seconds: float = CONNECT_RETRY_SECONDS,
     ) -> None:
+        """Initialise the telemetry client without opening a connection.
+
+        Args:
+            host: Hostname or IP address of the NetSentry dashboard server.
+            port: TCP port the dashboard server is listening on.
+            retry_seconds: Seconds to wait between connection attempts when
+                the dashboard is unavailable.
+
+        The background sender thread is created here but not started until
+        :meth:`start` is called.
+        """
         self.host = host
         self.port = port
         self.retry_seconds = retry_seconds
@@ -105,8 +116,26 @@ class TelemetrySocketClient:
                     f"Retrying in {self.retry_seconds} seconds."
                 )
                 self._stop_event.wait(self.retry_seconds)
+            except (ConnectionResetError, ConnectionAbortedError) as error:
+                # Server closed the connection mid-handshake (e.g. abrupt shutdown).
+                print(
+                    f"[agent] Dashboard dropped connection during handshake ({type(error).__name__}). "
+                    f"Retrying in {self.retry_seconds} seconds."
+                )
+                self._stop_event.wait(self.retry_seconds)
             except OSError as error:
-                print(f"[agent] Dashboard connection error: {error}")
+                print(
+                    f"[agent] Dashboard connection error: {error}. "
+                    f"Retrying in {self.retry_seconds} seconds."
+                )
+                self._stop_event.wait(self.retry_seconds)
+            except Exception as error:  # noqa: BLE001
+                # Guard against unexpected platform-specific or library errors so
+                # the retry loop is never bypassed by an unhandled exception.
+                print(
+                    f"[agent] Unexpected connection error ({type(error).__name__}): {error}. "
+                    f"Retrying in {self.retry_seconds} seconds."
+                )
                 self._stop_event.wait(self.retry_seconds)
 
         raise RuntimeError("Telemetry sender stopped before connecting to dashboard.")
@@ -120,6 +149,14 @@ class TelemetrySocketClient:
                 except RuntimeError as error:
                     print(f"[agent] Telemetry sender stopped: {error}")
                     break
+                except Exception as error:  # noqa: BLE001
+                    # _connect should not raise non-RuntimeError, but guard here
+                    # so an unexpected exception cannot silently kill the thread.
+                    print(
+                        f"[agent] Telemetry sender hit unexpected error "
+                        f"({type(error).__name__}): {error}"
+                    )
+                    break
 
             try:
                 frame = self._outbound_frames.get(timeout=0.5)
@@ -132,19 +169,32 @@ class TelemetrySocketClient:
                 except RuntimeError as error:
                     print(f"[agent] Telemetry sender stopped: {error}")
                     break
+                except Exception as error:  # noqa: BLE001
+                    print(
+                        f"[agent] Telemetry sender hit unexpected error "
+                        f"({type(error).__name__}): {error}"
+                    )
+                    break
 
                 try:
                     # sendall preserves the JSON Lines frame created by serialize_packet.
                     client_socket.sendall(frame.encode(STREAM_ENCODING))
                     break
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    # Server was shut down or forcibly aborted the connection.
                     print("[agent] Dashboard connection dropped. Reconnecting.")
                     self._close_socket()
                 except socket.timeout:
                     print("[agent] Dashboard send timed out. Reconnecting.")
                     self._close_socket()
                 except OSError as error:
-                    print(f"[agent] Socket send error: {error}")
+                    # Catch-all for platform-specific socket errors (e.g.
+                    # WSAECONNRESET on Windows which may not always surface as
+                    # ConnectionResetError).
+                    print(
+                        f"[agent] Dashboard connection lost "
+                        f"({error.errno}): {error}. Reconnecting."
+                    )
                     self._close_socket()
 
             self._outbound_frames.task_done()
@@ -190,9 +240,16 @@ def detect_compliance_flags(payload_preview: str, protocol_type: str) -> list[st
 
 
 def extract_packet_metadata(packet: Any) -> dict[str, Any] | None:
-    """Extract NetSentry packet metadata from a Scapy packet object."""
+    """Extract NetSentry packet metadata from a Scapy packet object.
+
+    Returns ``None`` for non-IP packets or when Scapy is unavailable, so
+    callers can skip forwarding without raising an exception.
+    """
     if IP is None or TCP is None or UDP is None:
-        print("[agent] Scapy protocol layers are unavailable.")
+        # Scapy unavailability is detected once at import time (IP et al. are
+        # set to None by the try/except block at the top of this module).  We
+        # do not log here because this function is called once per captured
+        # packet; the startup check in start_capture_agent handles the message.
         return None
 
     if not packet.haslayer(IP):
@@ -227,10 +284,22 @@ def extract_packet_metadata(packet: Any) -> dict[str, Any] | None:
     return packet_metadata
 
 
-def build_packet_processor(telemetry_client: TelemetrySocketClient):
-    """Create the Scapy callback that streams packet metadata to the dashboard."""
+from collections.abc import Callable
+
+
+def build_packet_processor(
+    telemetry_client: TelemetrySocketClient,
+) -> Callable[[Any], None]:
+    """Return a Scapy-compatible callback that streams packet metadata to the dashboard.
+
+    The returned closure captures *telemetry_client* and is passed directly to
+    :func:`scapy.all.sniff` as the ``prn`` argument.  Any exception raised
+    during metadata extraction or queuing is caught and logged so that Scapy's
+    capture loop is never interrupted by a processing error.
+    """
 
     def process_packet(packet: Any) -> None:
+        """Extract metadata from one Scapy packet and enqueue it for transmission."""
         try:
             packet_metadata = extract_packet_metadata(packet)
             if packet_metadata is None:

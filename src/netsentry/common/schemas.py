@@ -9,8 +9,20 @@ from typing import Any
 
 
 MAX_PAYLOAD_PREVIEW_LENGTH = 160
+
+# Single canonical encoding used by both the capture agent and the dashboard
+# server.  Both sides must agree on this value; changing it here is the only
+# place that needs touching.
+STREAM_ENCODING = "utf-8"
+
+# Newline-delimited JSON (NDJSON) framing: every serialized packet is exactly
+# one JSON object followed by a single 0x0A byte.  The server splits on this
+# byte to reassemble frames across TCP segment boundaries.
 JSON_FRAME_DELIMITER = "\n"
 
+# Canonical packet schema.  ``create_packet_metadata_template`` deep-copies
+# this dict so callers always receive an independent, mutable instance.
+# Do not mutate this module-level constant directly.
 PACKET_METADATA_TEMPLATE: dict[str, Any] = {
     "timestamp": "",
     "protocol_type": "Other",
@@ -43,7 +55,7 @@ def sanitize_payload_preview(
         payload_text = raw_payload
     else:
         payload_bytes = bytes(raw_payload)
-        payload_text = payload_bytes.decode("utf-8", errors="replace")
+        payload_text = payload_bytes.decode(STREAM_ENCODING, errors="replace")
 
     safe_characters: list[str] = []
     for character in payload_text:
@@ -64,7 +76,20 @@ def sanitize_payload_preview(
 
 
 def normalize_packet_metadata(packet_dict: dict[str, Any]) -> dict[str, Any]:
-    """Copy user packet data into the expected schema and sanitize the payload."""
+    """Copy caller-supplied packet data into the canonical schema and normalize fields.
+
+    Three normalization steps are applied in order:
+
+    1. **Schema merge** – only keys present in ``PACKET_METADATA_TEMPLATE`` are
+       copied, so unknown fields from callers are silently ignored.
+    2. **Protocol coercion** – ``protocol_type`` is cast to ``str`` and
+       defaults to ``"Other"`` if falsy.
+    3. **Payload sanitization** – raw bytes are decoded, non-printable
+       characters replaced, newlines escaped, and the preview truncated to
+       ``MAX_PAYLOAD_PREVIEW_LENGTH`` characters.
+    4. **Compliance flag coercion** – the ``compliance_flags`` value is
+       normalised to a ``list[str]`` regardless of what the caller passed.
+    """
     normalized_packet = create_packet_metadata_template()
 
     for field_name in normalized_packet:
@@ -90,11 +115,32 @@ def normalize_packet_metadata(packet_dict: dict[str, Any]) -> dict[str, Any]:
 
 
 def serialize_packet(packet_dict: dict[str, Any]) -> str:
-    """Encode packet metadata as one newline-delimited JSON frame."""
+    """Encode packet metadata as one newline-delimited JSON frame.
+
+    The returned string is always exactly one JSON object followed by a single
+    newline (0x0A).  The server's ``split_stream_buffer`` relies on this
+    guarantee to split concurrent frames arriving in a single TCP segment.
+
+    Why a literal newline cannot appear inside the JSON body:
+    - ``ensure_ascii=True`` prevents any multi-byte UTF-8 sequence from
+      containing 0x0A as a continuation byte.
+    - ``json.dumps`` encodes every control character in string values as a
+      JSON escape (e.g. ``\\n``), so no raw 0x0A survives inside a string.
+    - ``sanitize_payload_preview`` additionally pre-escapes ``\\n`` in the
+      payload before ``json.dumps`` is called, providing defence-in-depth.
+    - Non-string values (int, None, bool, list) never contain newlines.
+    """
     normalized_packet = normalize_packet_metadata(packet_dict)
 
-    # The newline delimiter marks one complete message over the raw TCP stream.
-    return (
-        json.dumps(normalized_packet, ensure_ascii=True, separators=(",", ":"))
-        + JSON_FRAME_DELIMITER
+    json_body = json.dumps(normalized_packet, ensure_ascii=True, separators=(",", ":"))
+
+    # Sanity-check the invariant: the body must be newline-free so that the
+    # single appended delimiter is unambiguous.  This assertion can never fire
+    # given the properties above, but it surfaces any future regression
+    # (e.g. a new field that bypasses sanitization) immediately at write time.
+    assert JSON_FRAME_DELIMITER not in json_body, (
+        "serialize_packet: JSON body contains a literal newline before the "
+        "frame delimiter was appended.  This would corrupt the NDJSON stream."
     )
+
+    return json_body + JSON_FRAME_DELIMITER
