@@ -6,7 +6,7 @@ The NetSentry Engine is an isolated, distributed network traffic monitoring and 
 
 My purpose for creating this software is to develop an optimization toolkit for network baseline visibility and security telemetry processing. By engineering a custom communication stream from scratch, I can practice solving common socket issues like buffer aggregation and handle multi-threaded client execution. Additionally, it gives me a practical tool to analyze local protocol distribution, audit connection metrics, and implement payload sanitization layers that flag compliance alerts safely.
 
-[Software Demo Video](http://youtube.link.goes.here)
+[Software Demo Video] https://www.loom.com/share/3dc7a96c409a4c90a95222cd7543a36b
 
 # Development Environment
 
