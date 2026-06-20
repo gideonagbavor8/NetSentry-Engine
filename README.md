@@ -1,34 +1,21 @@
 # Overview
 
-As a software engineer, I am developing the NetSentry Engine to deepen my understanding of low-level systems communication, concurrent programming, and automated security auditing. This project allows me to explore how network bytes are transmitted across a transport medium, how data payloads are safely parsed and sanitized under real-world constraints, and how to implement a high-performance network pipeline without disrupting production environments.
+As a software engineer expanding my knowledge of low-level systems and protocol behavior, I wanted to understand how telemetry transport streams operate outside high-level framework wrappers. This project focuses on capturing live data packets, classifying network protocols on the fly, and shipping structured tracking summaries to a centralized monitoring console using raw TCP streaming sockets.
 
-The NetSentry Engine is an isolated, distributed network traffic monitoring and packet analysis platform. It is architected as two decoupled Python services: a Capture Agent Client that sniffs real-time network traffic and a centralized Monitoring Dashboard Server that aggregates data streams. The agent passively captures live Layer 3 and Layer 4 packet data, formats the metadata into predictable schemas, and pipes them over a TCP socket loopback. The server processes these high-velocity telemetry feeds, separates merging frames using custom string structures, and computes real-time performance and protocol metrics.
+This software consists of two components: a network packet sniffing agent that runs locally to intercept active traffic layers, and a centralized monitoring dashboard server that listens continuously for agent telemetry connections. When traffic crosses the network card, the agent extracts structural attributes (including protocol identification, endpoint connections, and raw payload data), checks compliance rules for unencrypted data patterns, and sends a custom-formatted string directly to the listener.
 
-My purpose for creating this software is to develop an optimization toolkit for network baseline visibility and security telemetry processing. By engineering a custom communication stream from scratch, I can practice solving common socket issues like buffer aggregation and handle multi-threaded client execution. Additionally, it gives me a practical tool to analyze local protocol distribution, audit connection metrics, and implement payload sanitization layers that flag compliance alerts safely.
+I created this software to gain practical experience with socket programming lifecycles and data stream formatting. Building this tool helped me internalize how transport layers manage connection endpoints, how byte arrays map into strings across socket links, and how custom text parsing layouts work under live operational conditions.
 
-[Software Demo Video] https://www.loom.com/share/3dc7a96c409a4c90a95222cd7543a36b
+[Software Demo Video] 
 
 # Development Environment
 
-To develop this software, I utilized the following tools:
-* **Visual Studio Code (VS Code):** Used as the primary Integrated Development Environment (IDE) with integrated administrative split terminals for side-by-side component monitoring.
-* **Git and GitHub:** Employed for localized version tracking and public source repository hosting.
-* **PowerShell (Administrator Mode):** Utilized to grant the execution scripts elevated privileges for direct network interface driver interactions.
+To construct this network monitoring application, I utilized Visual Studio Code as the primary Integrated Development Environment (IDE) along with a native command-line terminal to run separate concurrent instances. Network traffic capturing was enabled by installing packet capture drivers locally to interface directly with the network adapter hardware layer.
 
-This project is authored entirely in the **Python** programming language, leveraging the following packages and native modules:
-* **Scapy:** Used to interact directly with the network interface card for live packet capture, parsing, and dissection.
-* **Sockets & Threading (Standard Library):** Leveraged to build the non-blocking concurrent TCP pipeline between the agent and the server.
-* **JSON (Standard Library):** Utilized for structured cross-process data serialization and frame exchange.
+The entire application was authored in the Python programming language. I utilized standard socket libraries to manage networking lifecycles, sys packages for connection handling controls, and the Scapy library to sniff and decode raw packets directly from the loopback interface.
 
-### Useful Websites
-* [Scapy Documentation](https://scapy.readthedocs.io/)
-* [Python Socket Programming Guide (Real Python)](https://realpython.com/python-sockets/)
-* [Npcap Windows Packet Capture Library](https://npcap.com/)
+# Useful Websites
 
-I used the following commands to set up my localized runtime environment:
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install -e .
+* [Python Socket Programming Documentation](https://docs.python.org/3/library/socket.html)
+* [Scapy Packet Sniffing Official Guide](https://scapy.readthedocs.io/en/latest/usage.html)
+* [W3Schools Python String Split Reference](https://www.w3schools.com/python/ref_string_split.asp)
