@@ -1,12 +1,28 @@
 import socket
 import sys
+import os
 
 BIND_IP = "127.0.0.1"
 BIND_PORT = 9999
 LOG_FILE_PATH = "packet_history_log.txt"
 
+def initialize_storage_environment():
+    """Verifies and prepares the text storage file layout environment on the local disk."""
+    print("[Storage] Initializing tracking log files...")
+    try:
+        if not os.path.exists(LOG_FILE_PATH):
+            with open(LOG_FILE_PATH, "w", encoding="utf-8") as f:
+                f.write("=== NETSENTRY PACKET TELEMETRY HISTORY SYSTEM LOG ===\n")
+            print(f"[Storage] Created new telemetry text database file: {LOG_FILE_PATH}")
+        else:
+            print(f"[Storage] Appending telemetry to active text database file: {LOG_FILE_PATH}")
+        return True
+    except Exception as storage_error:
+        print(f"[Storage Error] Failed to configure tracking environment: {storage_error}")
+        return False
+
 def print_log_record(count, proto, src, dest, compliance, preview):
-    """Outputs structured metric telemetry logs down into the console screen."""
+    """Outputs structured network telemetry records down onto the monitoring screen console."""
     print(f"--- [Network Trace Log Record #{count}] ---")
     print(f"  Protocol Identity:  {proto}")
     print(f"  Source Endpoint:    {src}")
@@ -16,15 +32,21 @@ def print_log_record(count, proto, src, dest, compliance, preview):
     print("-" * 45)
 
 def append_to_backup_file(count, proto, src, dest, compliance, preview):
-    """Saves telemetry lines permanently onto a local text backup log file."""
+    """Saves telemetry updates permanently into a localized text storage script backup log."""
     try:
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(f"Record #{count} | {proto} | From: {src} | To: {dest} | Status: {compliance} | Data: {preview}\n")
-    except Exception as e:
-        print(f"[Storage Warning] File backup failure encountered: {e}")
+    except Exception as file_error:
+        print(f"[Storage Warning] File system block writing failure: {file_error}")
 
 def run_dashboard():
-    # Setup simple TCP streaming socket listener
+    """Initializes and runs the streaming network dashboard backend socket listener interface."""
+    # Build out and clear workspace data logs
+    if not initialize_storage_environment():
+        print("[Fatal Error] Aborting server listener initialization due to storage blocks.")
+        sys.exit(1)
+
+    # Establish raw TCP streaming interface channels
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     
@@ -33,17 +55,16 @@ def run_dashboard():
         server.listen(5)
         print("==================================================")
         print(f"Dashboard Monitor Server live at {BIND_IP}:{BIND_PORT}")
-        print(f"Local text data log saving into: {LOG_FILE_PATH}")
         print("==================================================")
-    except Exception as e:
-        print(f"Failed to open socket interface tracking channels: {e}")
+    except Exception as socket_error:
+        print(f"Failed to bind socket streaming listener port boundaries: {socket_error}")
         sys.exit(1)
 
     packet_counter = 0
 
     try:
         while True:
-            # Handle incoming telemetry connections from the capture client agent
+            # Standby for incoming stream data packets pushed out by client agents
             client_sock, client_addr = server.accept()
             raw_bytes = client_sock.recv(4096)
             
@@ -59,7 +80,7 @@ def run_dashboard():
 
             packet_counter += 1
 
-            # Process custom vertical bar serialization blocks
+            # Break apart the custom vertical bar text layout blocks
             try:
                 segments = message_line.split("|")
                 protocol = segments[0]
@@ -68,20 +89,20 @@ def run_dashboard():
                 compliance = segments[3]
                 preview = segments[4] if len(segments) > 4 else "None"
 
-                # Update terminal console displays
+                # Push structural logs down into terminal screen updates
                 print_log_record(packet_counter, protocol, source, destination, compliance, preview)
                 
-                # Append rows into local storage files
+                # Append data record metrics permanently onto disk logs
                 append_to_backup_file(packet_counter, protocol, source, destination, compliance, preview)
                 
-            except Exception:
-                print(f"[Server Warning] Received non-standard layout string format: {message_line}")
+            except Exception as parse_error:
+                print(f"[Server Warning] Received unexpected string configuration: {message_line} | {parse_error}")
 
     except KeyboardInterrupt:
-        print("\nDashboard monitoring server stopping gracefully.")
+        print("\nDashboard monitoring server engine closing down smoothly.")
     finally:
         server.close()
-        print("Server socket shut down cleanly.")
+        print("Server socket interfaces disconnected successfully.")
 
 if __name__ == "__main__":
     run_dashboard()
