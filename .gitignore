@@ -8,3 +8,5 @@ dist/
 build/
 *.egg-info/
 .codex_access_check.txt
+config.bat
+node_modules
